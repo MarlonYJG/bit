@@ -1,13 +1,14 @@
+import React from 'react';
 import { Slot, SlotRegistry } from '@teambit/harmony';
 import { UIRuntime } from '@teambit/ui';
 import { ComponentID } from '@teambit/component';
-import { InMemoryCache, IdGetterObj } from 'apollo-cache-inmemory';
+import { InMemoryCache, IdGetterObj, NormalizedCacheObject } from 'apollo-cache-inmemory';
 import ApolloClient, { ApolloQueryResult, QueryOptions } from 'apollo-client';
 import { ApolloLink } from 'apollo-link';
 import { onError } from 'apollo-link-error';
-import { HttpLink } from 'apollo-link-http';
+import { HttpLink, createHttpLink } from 'apollo-link-http';
 import { WebSocketLink } from 'apollo-link-ws';
-import React from 'react';
+import crossFetch from 'cross-fetch';
 import { createLink } from './create-link';
 import { GraphQLProvider } from './graphql-provider';
 import { GraphQLServer } from './graphql-server';
@@ -41,6 +42,25 @@ export class GraphqlUI {
     return client;
   }
 
+  createSsrClient({ serverUrl, cookie }: { serverUrl: string; cookie?: any }) {
+    const link = createHttpLink({
+      credentials: 'same-origin',
+      uri: serverUrl,
+      headers: {
+        cookie,
+      },
+      fetch: crossFetch,
+    });
+
+    const client = new ApolloClient({
+      ssrMode: true,
+      link,
+      cache: this.getCache(),
+    });
+
+    return client;
+  }
+
   registerRemote(server: GraphQLServer) {
     this.remoteServerSlot.register(server);
   }
@@ -60,25 +80,33 @@ export class GraphqlUI {
     ]);
   }
 
-  private getCache() {
+  private getCache({ restore }: { restore?: boolean } = {}) {
     const cache = new InMemoryCache({
       dataIdFromObject: getIdFromObject,
     });
 
+    const restored = restore && this.restoreCacheFromDom();
+    if (restored) cache.restore(restored);
+
+    return cache;
+  }
+
+  private restoreCacheFromDom() {
     try {
       const domState = typeof document !== 'undefined' && document.getElementById('gql-cache');
 
-      if (domState) {
-        const parsed = JSON.parse(domState.innerHTML);
-        cache.restore(parsed);
-      } else {
+      if (!domState) {
         console.log('no cache to load');
+        return undefined;
       }
+
+      const parsed = JSON.parse(domState.innerHTML) as NormalizedCacheObject;
+      return parsed;
     } catch (e) {
       console.error('failing loading cache', e);
     }
 
-    return cache;
+    return undefined;
   }
 
   createLinks() {
@@ -114,6 +142,10 @@ export class GraphqlUI {
    */
   getProvider = ({ children }: { children: JSX.Element }) => {
     return <GraphQLProvider client={this.client}>{children}</GraphQLProvider>;
+  };
+
+  getSsrProvider = () => {
+    return GraphQLProvider;
   };
 
   static runtime = UIRuntime;
